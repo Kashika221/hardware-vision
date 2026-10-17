@@ -1,0 +1,354 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>AMR Metrics</title>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; font: 14px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: linear-gradient(135deg, #0b1229 0%, #1a1035 100%);
+    color: #e2e8f0; min-height: 100vh;
+  }
+  header {
+    padding: 14px 20px; background: rgba(30, 41, 59, 0.7); backdrop-filter: blur(10px);
+    border-bottom: 1px solid #334155;
+    display: flex; justify-content: space-between; align-items: center;
+    position: sticky; top: 0; z-index: 10;
+  }
+  header h1 {
+    margin: 0; font-size: 20px; font-weight: 600;
+    background: linear-gradient(90deg, #fbbf24, #38bdf8);
+    -webkit-background-clip: text; background-clip: text; color: transparent;
+  }
+  header a { color: #38bdf8; text-decoration: none; font-size: 13px; }
+  header a:hover { text-decoration: underline; }
+  main { padding: 20px; max-width: 1600px; margin: 0 auto; }
+
+  .kpis {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 14px; margin-bottom: 20px;
+  }
+  .kpi {
+    background: linear-gradient(135deg, rgba(30,41,59,0.9), rgba(51,65,85,0.6));
+    border: 1px solid #334155; border-radius: 12px; padding: 16px 18px;
+    position: relative; overflow: hidden;
+  }
+  .kpi::before {
+    content: ""; position: absolute; top: 0; left: 0; right: 0; height: 3px;
+    background: var(--accent, #38bdf8);
+  }
+  .kpi .label { font-size: 11px; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.08em; }
+  .kpi .value { font-size: 32px; font-weight: 700; margin-top: 6px; color: var(--accent, #38bdf8); }
+  .kpi .sub   { font-size: 12px; color: #64748b; margin-top: 4px; }
+
+  .grid {
+    display: grid;
+    grid-template-columns: 2fr 1fr;
+    gap: 16px;
+  }
+  @media (max-width: 900px) { .grid { grid-template-columns: 1fr; } }
+
+  .card {
+    background: rgba(30, 41, 59, 0.7); border: 1px solid #334155;
+    border-radius: 12px; padding: 16px; display: flex; flex-direction: column; gap: 10px;
+  }
+  .card h3 { margin: 0; font-size: 12px; text-transform: uppercase; color: #94a3b8;
+             letter-spacing: 0.08em; }
+  .card svg { display: block; width: 100%; height: auto; }
+
+  .timeline {
+    max-height: 400px; overflow-y: auto; font-size: 12px;
+  }
+  .timeline .row {
+    display: grid; grid-template-columns: 60px 60px 1fr;
+    padding: 6px 0; border-bottom: 1px dashed #334155; gap: 8px;
+  }
+  .timeline .ts { color: #64748b; font-family: ui-monospace, monospace; }
+  .timeline .kind {
+    text-align: center; padding: 1px 4px; border-radius: 3px; font-weight: 600;
+    font-size: 10px; text-transform: uppercase;
+  }
+  .timeline .kind.stock { background: #059669; color: #fff; }
+  .timeline .kind.pick  { background: #d97706; color: #fff; }
+  .muted { color: #64748b; }
+  .empty { color: #64748b; text-align: center; padding: 20px; font-style: italic; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>AMR Metrics — Live Dashboard</h1>
+  <span><a href="/">← back to control</a> &nbsp;·&nbsp; <span id="tick" class="muted">—</span></span>
+</header>
+
+<main>
+
+  <div class="kpis" id="kpis"></div>
+
+  <div class="grid" style="margin-bottom: 16px">
+    <div class="card">
+      <h3>Warehouse Cell-Visit Heatmap</h3>
+      <div id="heatWrap"><svg id="heatSvg" viewBox="0 0 400 200"></svg></div>
+      <div class="muted" style="font-size: 11px">Darker cells = more traversed. Walls in grey.</div>
+    </div>
+
+    <div class="card">
+      <h3>Shelf Utilisation</h3>
+      <svg id="donutSvg" viewBox="0 0 260 260"></svg>
+    </div>
+  </div>
+
+  <div class="grid" style="margin-bottom: 16px">
+    <div class="card">
+      <h3>FPS Over Time (live detection)</h3>
+      <svg id="fpsSvg" viewBox="0 0 800 220"></svg>
+    </div>
+
+    <div class="card">
+      <h3>Avg Confidence Over Time</h3>
+      <svg id="confSvg" viewBox="0 0 260 220"></svg>
+    </div>
+  </div>
+
+  <div class="grid">
+    <div class="card">
+      <h3>Detections per Product</h3>
+      <svg id="barSvg" viewBox="0 0 800 260"></svg>
+    </div>
+
+    <div class="card">
+      <h3>Recent Activity</h3>
+      <div class="timeline" id="timeline"></div>
+    </div>
+  </div>
+
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const PALETTE = ["#38bdf8","#f59e0b","#a78bfa","#22c55e","#f87171","#fbbf24","#ec4899","#14b8a6","#fb923c","#c084fc"];
+
+// ─────────────────────────── KPI cards ─────────────────────────────────────
+function renderKPIs(m) {
+  const items = [
+    {label:"Distance travelled", value:`${m.distance_m.toFixed(2)} m`, sub:"cumulative robot path", accent:"#38bdf8"},
+    {label:"Tasks completed",    value:`${m.tasks_total}`, sub:`stock ${m.tasks_stock} · pick ${m.tasks_pick}`, accent:"#22c55e"},
+    {label:"Products tracked",   value:`${(m.locked||[]).length}`, sub:(m.locked||[]).join(", ") || "—", accent:"#a78bfa"},
+    {label:"Avg task time",      value:`${(m.avg_task_ms/1000).toFixed(1)} s`, sub:"rolling last 60", accent:"#f59e0b"},
+    {label:"YOLOE detections",   value:`${m.detections_total}`, sub:"all frames combined", accent:"#ec4899"},
+    {label:"Uptime",             value:formatUptime(m.uptime_s), sub:"since server start", accent:"#14b8a6"},
+  ];
+  $("kpis").innerHTML = items.map(k => `
+    <div class="kpi" style="--accent:${k.accent}">
+      <div class="label">${k.label}</div>
+      <div class="value">${k.value}</div>
+      <div class="sub">${k.sub}</div>
+    </div>`).join("");
+}
+
+function formatUptime(s) {
+  s = Math.floor(s);
+  const h = Math.floor(s/3600), mn = Math.floor((s%3600)/60), sc = s%60;
+  return `${h>0?h+"h ":""}${mn}m ${sc}s`;
+}
+
+// ─────────────────────────── Line chart (FPS) ───────────────────────────────
+function drawLine(svgId, series, color, opts = {}) {
+  const svg = $(svgId);
+  const W = 800, H = 220, P = { l: 40, r: 12, t: 12, b: 26 };
+  const iw = W - P.l - P.r, ih = H - P.t - P.b;
+  svg.innerHTML = "";
+  if (!series.length) { svg.innerHTML = `<text x="${W/2}" y="${H/2}" fill="#64748b" text-anchor="middle" font-size="14">no data yet</text>`; return; }
+
+  const xs = series.map(p => p[0]);
+  const ys = series.map(p => p[1]);
+  const xmin = Math.min(...xs), xmax = Math.max(...xs);
+  const ymax = Math.max(1, ...ys) * 1.1;
+  const sx = (x) => P.l + (xmax === xmin ? iw : ((x - xmin) / (xmax - xmin)) * iw);
+  const sy = (y) => P.t + ih - (y / ymax) * ih;
+
+  // gridlines + y-labels
+  let g = "";
+  for (let i = 0; i <= 4; i++) {
+    const v = (ymax * i / 4);
+    const y = sy(v);
+    g += `<line x1="${P.l}" x2="${W-P.r}" y1="${y}" y2="${y}" stroke="#1e293b" stroke-width="1"/>`;
+    g += `<text x="${P.l-6}" y="${y+3}" text-anchor="end" fill="#64748b" font-size="10">${v.toFixed(opts.ydp||0)}</text>`;
+  }
+  // path
+  const d = series.map((p, i) => `${i ? "L" : "M"}${sx(p[0]).toFixed(1)},${sy(p[1]).toFixed(1)}`).join(" ");
+  // area fill
+  const area = d + ` L${sx(xmax).toFixed(1)},${sy(0).toFixed(1)} L${sx(xmin).toFixed(1)},${sy(0).toFixed(1)} Z`;
+  svg.innerHTML = g +
+    `<defs><linearGradient id="lg-${svgId}" x1="0" x2="0" y1="0" y2="1">
+      <stop offset="0%" stop-color="${color}" stop-opacity="0.35"/>
+      <stop offset="100%" stop-color="${color}" stop-opacity="0"/>
+    </linearGradient></defs>` +
+    `<path d="${area}" fill="url(#lg-${svgId})"/>` +
+    `<path d="${d}" fill="none" stroke="${color}" stroke-width="2"/>` +
+    `<text x="${W-P.r-4}" y="${P.t+12}" text-anchor="end" fill="${color}" font-size="12" font-weight="600">
+       latest: ${ys[ys.length-1].toFixed(opts.ydp||1)}</text>`;
+}
+
+// Same shape but square (260×220) for the confidence panel
+function drawLineSquare(svgId, series, color, opts = {}) {
+  const svg = $(svgId);
+  const W = 260, H = 220, P = { l: 34, r: 10, t: 12, b: 22 };
+  const iw = W - P.l - P.r, ih = H - P.t - P.b;
+  svg.innerHTML = "";
+  if (!series.length) { svg.innerHTML = `<text x="${W/2}" y="${H/2}" fill="#64748b" text-anchor="middle" font-size="12">no data</text>`; return; }
+  const xs = series.map(p => p[0]);
+  const ys = series.map(p => p[1]);
+  const xmin = Math.min(...xs), xmax = Math.max(...xs);
+  const ymax = Math.max(0.01, ...ys) * 1.1;
+  const sx = (x) => P.l + (xmax === xmin ? iw : ((x - xmin) / (xmax - xmin)) * iw);
+  const sy = (y) => P.t + ih - (y / ymax) * ih;
+  let g = "";
+  for (let i = 0; i <= 4; i++) {
+    const v = (ymax * i / 4);
+    const y = sy(v);
+    g += `<line x1="${P.l}" x2="${W-P.r}" y1="${y}" y2="${y}" stroke="#1e293b"/>`;
+    g += `<text x="${P.l-4}" y="${y+3}" text-anchor="end" fill="#64748b" font-size="9">${v.toFixed(2)}</text>`;
+  }
+  const d = series.map((p, i) => `${i ? "L" : "M"}${sx(p[0]).toFixed(1)},${sy(p[1]).toFixed(1)}`).join(" ");
+  svg.innerHTML = g +
+    `<path d="${d}" fill="none" stroke="${color}" stroke-width="2"/>` +
+    `<text x="${W-P.r-2}" y="${P.t+11}" text-anchor="end" fill="${color}" font-size="11" font-weight="600">
+       ${ys[ys.length-1].toFixed(3)}</text>`;
+}
+
+// ─────────────────────────── Bar chart (detections) ─────────────────────────
+function drawBars(svgId, dict) {
+  const svg = $(svgId);
+  const W = 800, H = 260, P = { l: 100, r: 20, t: 20, b: 24 };
+  svg.innerHTML = "";
+  const entries = Object.entries(dict).sort((a,b)=>b[1]-a[1]);
+  if (!entries.length) {
+    svg.innerHTML = `<text x="${W/2}" y="${H/2}" fill="#64748b" text-anchor="middle" font-size="14">
+      no detections yet — use Section 3 "Preview target on webcam"</text>`;
+    return;
+  }
+  const max = Math.max(...entries.map(e=>e[1]));
+  const rowH = (H - P.t - P.b) / entries.length;
+  const bw = W - P.l - P.r;
+  const out = entries.map(([name, val], i) => {
+    const y = P.t + i * rowH + 3;
+    const w = (val / max) * bw;
+    const color = PALETTE[i % PALETTE.length];
+    return `<text x="${P.l-8}" y="${y+rowH*0.55}" text-anchor="end" fill="#e2e8f0" font-size="12" font-weight="600">${name}</text>
+            <rect x="${P.l}" y="${y}" width="${w}" height="${rowH-6}" fill="${color}" rx="4" opacity="0.85"/>
+            <text x="${P.l + w + 6}" y="${y+rowH*0.55}" fill="#e2e8f0" font-size="11">${val}</text>`;
+  }).join("");
+  svg.innerHTML = out;
+}
+
+// ─────────────────────────── Donut chart (shelves) ──────────────────────────
+function drawDonut(svgId, shelves, products) {
+  const svg = $(svgId);
+  const W = 260, H = 260, cx = W/2, cy = H/2, R = 110, r = 68;
+  svg.innerHTML = "";
+  const counts = {};
+  for (const s of shelves) counts[s.id] = 0;
+  for (const p of products) counts[p.shelf_id] = (counts[p.shelf_id]||0) + p.qty;
+  const items = Object.entries(counts);
+  const total = items.reduce((a,[,v])=>a+v, 0);
+  if (!total) {
+    svg.innerHTML = `<circle cx="${cx}" cy="${cy}" r="${R}" fill="none" stroke="#334155" stroke-width="${R-r}"/>
+      <text x="${cx}" y="${cy}" fill="#64748b" text-anchor="middle" font-size="12">no products stocked</text>`;
+    return;
+  }
+  let angle = -Math.PI / 2;
+  let arcs = "", labels = "";
+  items.forEach(([sid, val], i) => {
+    if (!val) return;
+    const frac = val / total;
+    const a2 = angle + frac * 2 * Math.PI;
+    const large = frac > 0.5 ? 1 : 0;
+    const x1 = cx + R * Math.cos(angle), y1 = cy + R * Math.sin(angle);
+    const x2 = cx + R * Math.cos(a2),    y2 = cy + R * Math.sin(a2);
+    const xi1 = cx + r * Math.cos(a2),   yi1 = cy + r * Math.sin(a2);
+    const xi2 = cx + r * Math.cos(angle),yi2 = cy + r * Math.sin(angle);
+    const color = PALETTE[i % PALETTE.length];
+    arcs += `<path d="M${x1},${y1} A${R},${R} 0 ${large} 1 ${x2},${y2}
+             L${xi1},${yi1} A${r},${r} 0 ${large} 0 ${xi2},${yi2} Z"
+             fill="${color}" opacity="0.9"><title>${sid}: ${val}</title></path>`;
+    const mid = (angle + a2) / 2;
+    const lx = cx + (R+r)/2 * Math.cos(mid), ly = cy + (R+r)/2 * Math.sin(mid);
+    if (frac > 0.05) labels += `<text x="${lx}" y="${ly+4}" text-anchor="middle" fill="#0f172a" font-size="11" font-weight="700">${sid}</text>`;
+    angle = a2;
+  });
+  svg.innerHTML = arcs + labels +
+    `<text x="${cx}" y="${cy-6}" text-anchor="middle" fill="#e2e8f0" font-size="26" font-weight="700">${total}</text>
+     <text x="${cx}" y="${cy+16}" text-anchor="middle" fill="#94a3b8" font-size="11">items stocked</text>`;
+}
+
+// ─────────────────────────── Heatmap ───────────────────────────────────────
+function drawHeatmap(svgId, heat, warehouse) {
+  const svg = $(svgId);
+  if (!heat || !warehouse) {
+    svg.innerHTML = `<text x="200" y="100" fill="#64748b" text-anchor="middle" font-size="12">import a warehouse first</text>`;
+    return;
+  }
+  const rows = warehouse.rows ?? Math.round(warehouse.height_m / warehouse.cell_size_m);
+  const cols = warehouse.cols ?? Math.round(warehouse.width_m  / warehouse.cell_size_m);
+  const aspect = cols / rows;
+  const W = 400, H = Math.max(120, Math.min(320, Math.round(W / aspect)));
+  svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+  const cw = W / cols, ch = H / rows;
+  const maxV = Math.max(1, ...heat.flat());
+
+  // We overlay two hints: shelf cells (from warehouse), visited heat
+  let out = "";
+  for (const s of warehouse.shelves) {
+    const x = (s.x_m - s.w_m/2) / warehouse.width_m * W;
+    const y = (1 - (s.y_m + s.h_m/2) / warehouse.height_m) * H;
+    const w = s.w_m / warehouse.width_m * W;
+    const h = s.h_m / warehouse.height_m * H;
+    out += `<rect x="${x}" y="${y}" width="${w}" height="${h}" fill="#334155" opacity="0.65"/>`;
+  }
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      const v = heat[r][c];
+      if (!v) continue;
+      const a = Math.min(1, v / maxV);
+      // Fire-ish gradient
+      const R = Math.round(255 * a), G = Math.round(180 * (1 - a)), B = Math.round(40 * (1 - a));
+      out += `<rect x="${(c*cw).toFixed(2)}" y="${(r*ch).toFixed(2)}" width="${cw+0.5}" height="${ch+0.5}"
+                    fill="rgb(${R},${G},${B})" opacity="${(0.3 + 0.7*a).toFixed(2)}"/>`;
+    }
+  }
+  svg.innerHTML = out;
+}
+
+// ─────────────────────────── Timeline ───────────────────────────────────────
+function renderTimeline(activity) {
+  if (!activity.length) { $("timeline").innerHTML = `<div class="empty">no activity yet</div>`; return; }
+  $("timeline").innerHTML = activity.map(a => `
+    <div class="row">
+      <div class="ts">${a.ts}</div>
+      <div><span class="kind ${a.kind}">${a.kind}</span></div>
+      <div>${a.message}</div>
+    </div>`).join("");
+}
+
+// ─────────────────────────── Main refresh ───────────────────────────────────
+async function refresh() {
+  const m = await (await fetch("/api/metrics")).json();
+  renderKPIs(m);
+  drawHeatmap("heatSvg", m.cell_visit_heatmap, m.warehouse);
+  drawDonut("donutSvg", m.shelves, m.products);
+  drawLine("fpsSvg", m.fps_series, "#38bdf8", { ydp: 0 });
+  drawLineSquare("confSvg", m.confidence_series, "#22c55e", { ydp: 3 });
+  drawBars("barSvg", m.detections_by_product);
+  renderTimeline(m.activity);
+  $("tick").textContent = `updated ${new Date().toLocaleTimeString()}`;
+}
+
+refresh();
+setInterval(refresh, 2000);
+</script>
+
+</body>
+</html>

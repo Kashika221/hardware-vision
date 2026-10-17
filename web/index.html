@@ -1,0 +1,979 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Autonomous Inventory Robot</title>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; font: 14px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: #0f172a; color: #e2e8f0;
+  }
+  header {
+    padding: 12px 20px; background: #1e293b; border-bottom: 1px solid #334155;
+    display: flex; justify-content: space-between; align-items: center;
+  }
+  header h1 { margin: 0; font-size: 18px; font-weight: 600; }
+  .pill { padding: 3px 10px; border-radius: 999px; font-size: 12px; background: #334155; }
+  .pill.moving  { background: #d97706; }
+  .pill.at_shelf, .pill.picking, .pill.placing { background: #059669; }
+  .pill.error   { background: #dc2626; }
+  main {
+    display: grid; grid-template-columns: 360px 1fr 340px;
+    gap: 12px; padding: 12px; height: calc(100vh - 55px);
+  }
+  section {
+    background: #1e293b; border: 1px solid #334155; border-radius: 8px;
+    padding: 14px; overflow: auto;
+  }
+  h2 { font-size: 13px; text-transform: uppercase; letter-spacing: 0.08em;
+       color: #94a3b8; margin: 0 0 10px; }
+  label { display: block; font-size: 12px; margin: 8px 0 3px; color: #cbd5e1; }
+  input, button, select {
+    width: 100%; padding: 7px 9px; border-radius: 6px; border: 1px solid #475569;
+    background: #0f172a; color: #e2e8f0; font: inherit;
+  }
+  button {
+    background: #2563eb; border: none; cursor: pointer; font-weight: 600;
+    padding: 9px; margin-top: 10px;
+  }
+  button:hover { background: #1d4ed8; }
+  button.secondary { background: #475569; }
+  button.secondary:hover { background: #334155; }
+  .row { display: flex; gap: 8px; }
+  .row > * { flex: 1; }
+  canvas { display: block; background: #0f172a; border: 1px solid #334155;
+           border-radius: 8px; width: 100%; height: 100%; }
+  #canvas-wrap { display: flex; flex-direction: column; }
+  #canvas-wrap section { flex: 1; display: flex; flex-direction: column; }
+  #canvas-wrap canvas { flex: 1; min-height: 0; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 6px 4px; border-bottom: 1px solid #334155; }
+  th { color: #94a3b8; font-size: 11px; text-transform: uppercase; }
+  .muted { color: #64748b; font-size: 12px; }
+  #log {
+    height: 130px; overflow: auto; font-family: ui-monospace, monospace;
+    font-size: 12px; background: #0f172a; padding: 8px; border-radius: 6px;
+    border: 1px solid #334155;
+  }
+  .log-line { padding: 2px 0; }
+  .log-line.err { color: #f87171; }
+  .log-line.ok  { color: #34d399; }
+  img.preview { max-width: 100%; border-radius: 6px; border: 1px solid #334155;
+                margin-top: 8px; }
+  .annot { position: relative; margin-top: 8px; user-select: none; }
+  .annot canvas { display: block; max-width: 100%; border-radius: 6px;
+                  border: 1px solid #334155; cursor: crosshair; background: #0f172a; }
+  .annot .hint { position: absolute; top: 6px; left: 6px; background: rgba(0,0,0,0.6);
+                 color: #fbbf24; font-size: 11px; padding: 2px 6px; border-radius: 4px; }
+  .annot .bbox-info { font-size: 11px; color: #94a3b8; margin-top: 4px; }
+  .annot .expand-btn { position: absolute; top: 6px; right: 6px;
+    background: rgba(0,0,0,0.6); color: #fbbf24; border: 1px solid #fbbf24;
+    padding: 2px 8px; border-radius: 4px; font-size: 11px; cursor: pointer;
+    width: auto; margin: 0; }
+  .annot .expand-btn:hover { background: #fbbf24; color: #000; }
+
+  /* Fullscreen annotator modal */
+  #annotModal {
+    position: fixed; inset: 0; background: rgba(0,0,0,0.85); z-index: 1000;
+    display: none; align-items: center; justify-content: center; padding: 20px;
+  }
+  #annotModal.open { display: flex; }
+  #annotModal .box {
+    background: #1e293b; border-radius: 10px; padding: 16px;
+    max-width: 95vw; max-height: 95vh; display: flex; flex-direction: column;
+    gap: 10px;
+  }
+  #annotModal canvas {
+    max-width: 85vw; max-height: 75vh; background: #0f172a;
+    border: 1px solid #334155; border-radius: 6px; cursor: crosshair;
+    display: block;
+  }
+  #annotModal .toolbar { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+  #annotModal .toolbar > div { display: flex; gap: 8px; }
+  #annotModal button { width: auto; padding: 6px 14px; margin: 0; }
+  #annotModal .oneshot-fields { display: none; gap: 8px; align-items: center; }
+  #annotModal .oneshot-fields.on { display: flex; }
+  #annotModal .oneshot-fields input { width: 200px; }
+  details { margin-top: 8px; }
+  summary { cursor: pointer; color: #94a3b8; font-size: 12px; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Autonomous Inventory Robot — Dashboard</h1>
+  <span>
+    <a href="/metrics" target="_blank"
+       style="background:linear-gradient(90deg,#fbbf24,#38bdf8);color:#0f172a;padding:6px 14px;border-radius:6px;font-weight:700;text-decoration:none;margin-right:12px">
+       📊 Metrics
+    </a>
+    <button id="viewLogsBtn" style="width:auto;padding:5px 12px;margin:0 12px 0 0;background:#334155">View server logs</button>
+    Status: <span id="status" class="pill">disconnected</span>
+    &nbsp;&nbsp;<span id="msg" class="muted"></span>
+  </span>
+</header>
+
+<div id="logsModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.85);z-index:2000;align-items:center;justify-content:center;padding:20px">
+  <div style="background:#1e293b;border-radius:10px;padding:16px;max-width:95vw;max-height:95vh;width:1000px;display:flex;flex-direction:column;gap:10px">
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:10px">
+      <div><strong style="color:#fbbf24">Server logs</strong> <span id="logsPath" class="muted"></span></div>
+      <div>
+        <button id="logsRefreshBtn" style="width:auto;padding:6px 12px;margin:0" class="secondary">Refresh</button>
+        <button id="logsCopyBtn" style="width:auto;padding:6px 12px;margin:0" class="secondary">Copy all</button>
+        <button id="logsCloseBtn" style="width:auto;padding:6px 12px;margin:0">Close</button>
+      </div>
+    </div>
+    <pre id="logsContent" style="flex:1;overflow:auto;background:#0f172a;color:#e2e8f0;padding:12px;border-radius:6px;font-family:ui-monospace,monospace;font-size:12px;white-space:pre-wrap;margin:0;max-height:75vh"></pre>
+  </div>
+</div>
+
+<main>
+
+  <!-- LEFT: MAP -->
+  <section>
+    <h2>1. Warehouse Map</h2>
+
+    <details open>
+      <summary>Import pen-and-paper map</summary>
+      <label>Paper photo</label>
+      <input type="file" id="mapFile" accept="image/*" />
+      <div class="row">
+        <div><label>Width (m)</label><input id="mapW" type="number" value="10" step="0.1" /></div>
+        <div><label>Height (m)</label><input id="mapH" type="number" value="6" step="0.1" /></div>
+      </div>
+      <label>Cell size (m)</label>
+      <input id="mapCell" type="number" value="0.10" step="0.01" />
+      <button id="importBtn">Import & Digitize</button>
+      <img id="warpedPreview" class="preview" hidden />
+    </details>
+
+    <details>
+      <summary>Generate synthetic test drawing</summary>
+      <div class="row">
+        <div><label>Width (m)</label><input id="synthW" type="number" value="10" step="0.1" /></div>
+        <div><label>Height (m)</label><input id="synthH" type="number" value="6" step="0.1" /></div>
+      </div>
+      <label>Number of shelves</label>
+      <input id="synthN" type="number" value="4" min="1" max="12" />
+      <button id="synthBtn" class="secondary">Generate & Download</button>
+      <img id="synthPreview" class="preview" hidden />
+    </details>
+
+    <h2 style="margin-top:16px">Shelves</h2>
+    <table id="shelfTable"><thead>
+      <tr><th>ID</th><th>QR</th><th>x</th><th>y</th><th></th></tr>
+    </thead><tbody></tbody></table>
+  </section>
+
+  <!-- CENTER: LIVE MAP -->
+  <div id="canvas-wrap">
+    <section>
+      <h2>Live Warehouse View</h2>
+      <canvas id="grid" width="900" height="600"></canvas>
+      <div id="log"></div>
+    </section>
+  </div>
+
+  <!-- RIGHT: INVENTORY + LIVE -->
+  <section>
+    <h2>2. Live camera — add & track products</h2>
+
+    <label>Source</label>
+    <select id="liveSource">
+      <option value="webcam">Webcam</option>
+      <option value="video">Video file</option>
+    </select>
+
+    <div id="webcamOpts">
+      <label>Camera index</label>
+      <input id="camIdx" type="number" value="0" min="0" />
+    </div>
+
+    <div id="videoOpts" hidden>
+      <label>Video file</label>
+      <input type="file" id="videoFile" accept="video/*" />
+    </div>
+
+    <label style="margin-top:8px">Product name (pre-fill for A)</label>
+    <input id="prefillName" placeholder="e.g. pen" />
+
+    <label>Shelf (optional — overrides round-robin)</label>
+    <select id="prefillShelf">
+      <option value="">Auto (round-robin)</option>
+    </select>
+
+    <div class="row">
+      <button id="liveStartBtn">Start live camera</button>
+      <button id="liveStopBtn" class="secondary">Stop</button>
+    </div>
+    <img id="liveStream" class="preview" hidden />
+    <div class="muted" style="margin-top:6px">
+      Shortcuts while live: <b style="color:#fbbf24">A</b> = snap &amp; add new product to stock
+    </div>
+    <div id="lockStatus" class="muted" style="margin-top:6px">no products locked yet</div>
+
+    <h2 style="margin-top:16px">3. Pick a Product</h2>
+    <label>Product name (must be added in Section 2 first)</label>
+    <input id="pickName" placeholder="e.g. pen" list="pickNameOptions" />
+    <datalist id="pickNameOptions"></datalist>
+
+    <label>Camera index (for preview)</label>
+    <input id="pickCamIdx" type="number" value="0" min="0" />
+
+    <div class="row">
+      <button id="pickPreviewStartBtn" class="secondary">Preview target on webcam</button>
+      <button id="pickPreviewStopBtn" class="secondary">Stop preview</button>
+    </div>
+    <img id="pickStream" class="preview" hidden />
+    <div class="muted" style="margin-top:6px" id="pickStreamMsg"></div>
+
+    <button id="pickBtn">Send Robot to Pick</button>
+
+    <h2 style="margin-top:16px">Inventory</h2>
+    <table id="invTable"><thead>
+      <tr><th>Product</th><th>Shelf</th><th>Qty</th><th></th></tr>
+    </thead><tbody></tbody></table>
+
+    <h2 style="margin-top:16px">4. Detect on a still image (YOLOE)</h2>
+    <label>Shelf photo</label>
+    <input type="file" id="detectFile" accept="image/*" />
+    <button id="detectBtn" class="secondary">Run detection</button>
+    <img id="detectPreview" class="preview" hidden />
+  </section>
+
+</main>
+
+<!-- Fullscreen annotator modal -->
+<div id="annotModal">
+  <div class="box">
+    <div class="toolbar">
+      <div>
+        <strong id="annotModalTitle" style="color:#fbbf24">Draw target box</strong>
+        <span class="muted" id="annotModalInfo">bbox: —</span>
+      </div>
+      <div class="oneshot-fields" id="annotOneShotFields">
+        <label style="margin:0">Product name</label>
+        <input id="annotOneShotName" placeholder="e.g. pink box" />
+      </div>
+      <div>
+        <button type="button" id="annotModalClear" class="secondary">Clear</button>
+        <button type="button" id="annotModalCancel" class="secondary">Cancel</button>
+        <button type="button" id="annotModalOk">Confirm</button>
+      </div>
+    </div>
+    <canvas id="annotModalCanvas"></canvas>
+  </div>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const log = (msg, cls="") => {
+  const el = $("log");
+  const line = document.createElement("div");
+  line.className = "log-line " + cls;
+  line.textContent = `[${new Date().toLocaleTimeString()}] ${msg}`;
+  el.appendChild(line);
+  el.scrollTop = el.scrollHeight;
+};
+
+let STATE = { warehouse: null, robot: null, products: [], gridCells: null };
+
+// ─── Reusable image annotator (drag-a-box) ────────────────────────────────
+// Attach to any <input type="file" data-annotate="<containerId>">.
+// After the user picks an image and drags a box, `getBBox(<containerId>)`
+// returns [x1,y1,x2,y2] in ORIGINAL image pixel coords, or null.
+const ANNOT = {};   // containerId -> {img, bbox: [x1,y1,x2,y2] | null}
+
+function attachAnnotators() {
+  document.querySelectorAll("input[type=file][data-annotate]").forEach(inp => {
+    const contId = inp.dataset.annotate;
+    const cont   = document.getElementById(contId);
+    const canvas = cont.querySelector("canvas");
+    const info   = cont.querySelector(".bbox-info");
+    const ctx    = canvas.getContext("2d");
+
+    inp.addEventListener("change", () => {
+      const file = inp.files[0];
+      if (!file) { cont.hidden = true; return; }
+      const img = new Image();
+      img.onload = () => {
+        const maxW = 320;
+        const scale = Math.min(1, maxW / img.naturalWidth);
+        canvas.width  = Math.round(img.naturalWidth  * scale);
+        canvas.height = Math.round(img.naturalHeight * scale);
+        canvas.dataset.scale = scale;
+        ANNOT[contId] = { img, bbox: null, scale };
+        cont.hidden = false;
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+        info.textContent = "bbox: — (drag a box)";
+      };
+      img.src = URL.createObjectURL(file);
+    });
+
+    let dragging = false, sx = 0, sy = 0, ex = 0, ey = 0;
+    function xy(e) {
+      const r = canvas.getBoundingClientRect();
+      const kx = canvas.width  / r.width;
+      const ky = canvas.height / r.height;
+      return [(e.clientX - r.left) * kx, (e.clientY - r.top) * ky];
+    }
+    canvas.addEventListener("mousedown", (e) => {
+      [sx, sy] = xy(e); ex = sx; ey = sy;
+      dragging = true;
+    });
+    canvas.addEventListener("mousemove", (e) => {
+      if (!dragging) return;
+      [ex, ey] = xy(e);
+      redraw();
+    });
+    const finish = () => {
+      if (!dragging) return;
+      dragging = false;
+      const a = ANNOT[contId]; if (!a) return;
+      const s = 1 / a.scale;
+      const x1 = Math.round(Math.min(sx, ex) * s);
+      const y1 = Math.round(Math.min(sy, ey) * s);
+      const x2 = Math.round(Math.max(sx, ex) * s);
+      const y2 = Math.round(Math.max(sy, ey) * s);
+      if (x2 - x1 < 4 || y2 - y1 < 4) { a.bbox = null; info.textContent = "bbox: — (too small)"; return; }
+      a.bbox = [x1, y1, x2, y2];
+      info.textContent = `bbox: [${x1}, ${y1}, ${x2}, ${y2}]`;
+    };
+    canvas.addEventListener("mouseup", finish);
+    canvas.addEventListener("mouseleave", finish);
+
+    function redraw() {
+      const a = ANNOT[contId]; if (!a) return;
+      ctx.drawImage(a.img, 0, 0, canvas.width, canvas.height);
+      ctx.strokeStyle = "#fbbf24"; ctx.lineWidth = 2;
+      ctx.setLineDash([5, 3]);
+      ctx.strokeRect(Math.min(sx, ex), Math.min(sy, ey),
+                     Math.abs(ex - sx), Math.abs(ey - sy));
+      ctx.setLineDash([]);
+    }
+  });
+}
+
+function getBBox(containerId) {
+  return ANNOT[containerId]?.bbox || null;
+}
+
+// ─── Fullscreen annotator modal ───────────────────────────────────────────
+const modal      = document.getElementById("annotModal");
+const modalCanvas= document.getElementById("annotModalCanvas");
+const modalCtx   = modalCanvas.getContext("2d");
+const modalInfo  = document.getElementById("annotModalInfo");
+let modalState = { contId: null, img: null, scale: 1, bbox: null,
+                   sx: 0, sy: 0, ex: 0, ey: 0, dragging: false,
+                   oneShot: null };   // {mode: "stock"|"relock", blob}
+
+function openModal(contId) {
+  const a = ANNOT[contId];
+  if (!a) return;
+  modalState.contId = contId;
+  modalState.oneShot = null;
+  modalState.img    = a.img;
+  modalState.bbox   = a.bbox;
+  _openModalCommon("Draw target box");
+}
+
+function openOneShotModal(mode, blob, img, title) {
+  modalState.contId = null;
+  modalState.oneShot = { mode, blob };
+  modalState.img = img;
+  modalState.bbox = null;
+  _openModalCommon(title);
+}
+
+function _openModalCommon(title) {
+  modalState.dragging = false;
+  const img = modalState.img;
+  const maxW = window.innerWidth  * 0.85;
+  const maxH = window.innerHeight * 0.75;
+  const s = Math.min(maxW / img.naturalWidth, maxH / img.naturalHeight, 1);
+  modalState.scale = s;
+  modalCanvas.width  = Math.round(img.naturalWidth  * s);
+  modalCanvas.height = Math.round(img.naturalHeight * s);
+  document.getElementById("annotModalTitle").textContent = title;
+  const fields = document.getElementById("annotOneShotFields");
+  const nameInput = document.getElementById("annotOneShotName");
+  if (modalState.oneShot && modalState.oneShot.mode === "stock") {
+    fields.classList.add("on");
+    const prefill = document.getElementById("prefillName");
+    nameInput.value = (prefill && prefill.value.trim()) || "";
+    setTimeout(() => (nameInput.value ? modalCanvas : nameInput).focus(), 50);
+  } else {
+    fields.classList.remove("on");
+  }
+  modal.classList.add("open");
+  redrawModal();
+}
+
+function closeModal() { modal.classList.remove("open"); }
+
+function redrawModal() {
+  const { img, scale, bbox, dragging, sx, sy, ex, ey } = modalState;
+  if (!img) return;
+  modalCtx.drawImage(img, 0, 0, modalCanvas.width, modalCanvas.height);
+  modalCtx.strokeStyle = "#fbbf24"; modalCtx.lineWidth = 2;
+
+  if (dragging) {
+    modalCtx.setLineDash([5, 3]);
+    modalCtx.strokeRect(Math.min(sx, ex), Math.min(sy, ey),
+                        Math.abs(ex - sx), Math.abs(ey - sy));
+    modalCtx.setLineDash([]);
+    const s = 1 / scale;
+    const x1 = Math.round(Math.min(sx, ex) * s);
+    const y1 = Math.round(Math.min(sy, ey) * s);
+    const x2 = Math.round(Math.max(sx, ex) * s);
+    const y2 = Math.round(Math.max(sy, ey) * s);
+    modalInfo.textContent = `bbox: [${x1}, ${y1}, ${x2}, ${y2}]`;
+  } else if (bbox) {
+    const [x1, y1, x2, y2] = bbox.map(v => v * scale);
+    modalCtx.strokeRect(x1, y1, x2 - x1, y2 - y1);
+    modalInfo.textContent = `bbox: [${bbox.join(", ")}]`;
+  } else {
+    modalInfo.textContent = "bbox: — (drag to draw)";
+  }
+}
+
+function _canvasXY(canvas, e) {
+  // Convert a mouse event to canvas INTERNAL pixel coordinates.
+  // Necessary whenever CSS width/height differ from the canvas .width/.height
+  // attributes (e.g. modal max-width shrinks the canvas below its native size).
+  const r = canvas.getBoundingClientRect();
+  const sx = canvas.width  / r.width;
+  const sy = canvas.height / r.height;
+  return { x: (e.clientX - r.left) * sx, y: (e.clientY - r.top) * sy };
+}
+
+modalCanvas.addEventListener("mousedown", (e) => {
+  const p = _canvasXY(modalCanvas, e);
+  modalState.sx = modalState.ex = p.x;
+  modalState.sy = modalState.ey = p.y;
+  modalState.dragging = true;
+});
+modalCanvas.addEventListener("mousemove", (e) => {
+  if (!modalState.dragging) return;
+  const p = _canvasXY(modalCanvas, e);
+  modalState.ex = p.x;
+  modalState.ey = p.y;
+  redrawModal();
+});
+function finishModalDraw() {
+  if (!modalState.dragging) return;
+  modalState.dragging = false;
+  const s = 1 / modalState.scale;
+  const x1 = Math.round(Math.min(modalState.sx, modalState.ex) * s);
+  const y1 = Math.round(Math.min(modalState.sy, modalState.ey) * s);
+  const x2 = Math.round(Math.max(modalState.sx, modalState.ex) * s);
+  const y2 = Math.round(Math.max(modalState.sy, modalState.ey) * s);
+  if (x2 - x1 < 4 || y2 - y1 < 4) { modalState.bbox = null; }
+  else { modalState.bbox = [x1, y1, x2, y2]; }
+  redrawModal();
+}
+modalCanvas.addEventListener("mouseup", finishModalDraw);
+modalCanvas.addEventListener("mouseleave", finishModalDraw);
+
+document.getElementById("annotModalClear").onclick = () => {
+  modalState.bbox = null; redrawModal();
+};
+document.getElementById("annotModalCancel").onclick = () => {
+  const wasOneShot = !!modalState.oneShot;
+  closeModal();
+  if (wasOneShot) resumeLiveStream();
+};
+document.getElementById("annotModalOk").onclick = async () => {
+  // One-shot flows: from a live-webcam key press ("a" = stock, "r" = relock)
+  if (modalState.oneShot) {
+    const { mode, blob } = modalState.oneShot;
+    const bb = modalState.bbox;
+    if (!bb) { log("draw a box first", "err"); return; }
+    const fd = new FormData();
+    const fname = mode === "stock" ? "stock_frame.png" : "relock_frame.png";
+    fd.append(mode === "stock" ? "ref_image" : "image", blob, fname);
+    fd.append("x1", bb[0]); fd.append("y1", bb[1]);
+    fd.append("x2", bb[2]); fd.append("y2", bb[3]);
+
+    const name = document.getElementById("annotOneShotName").value.trim();
+    if (!name) { log("product name required", "err"); return; }
+    fd.append("name", name);
+    const chosenShelf = document.getElementById("prefillShelf").value.trim();
+    if (chosenShelf) fd.append("shelf_id", chosenShelf);
+    closeModal();
+    resumeLiveStream();
+    // clear the pre-fill so next A starts empty
+    document.getElementById("prefillName").value = "";
+    log(`STOCK ${name}${chosenShelf ? ` → ${chosenShelf}` : ""} (from live frame) ...`);
+    const r = await (await fetch("/api/stock", { method: "POST", body: fd })).json();
+    if (r.ok) {
+      log(`stocked ${name} → ${r.shelf.id}`, "ok");
+      if (r.vpe_error) {
+        log(`YOLOE lock failed: ${r.vpe_error}`, "err");
+      } else if (r.locked && r.locked.length) {
+        log(`YOLOE now tracks: ${r.locked.join(", ")}`, "ok");
+      }
+    } else {
+      log(`error: ${r.error}`, "err");
+    }
+    await refreshState();
+    return;
+  }
+
+  // Regular flow: write bbox back to a source annotator
+  const contId = modalState.contId;
+  if (!contId) return closeModal();
+  const a = ANNOT[contId];
+  a.bbox = modalState.bbox;
+  const cont = document.getElementById(contId);
+  const cv = cont.querySelector("canvas");
+  const cx = cv.getContext("2d");
+  cx.drawImage(a.img, 0, 0, cv.width, cv.height);
+  if (a.bbox) {
+    const s = a.scale;
+    cx.strokeStyle = "#fbbf24"; cx.lineWidth = 2;
+    cx.strokeRect(a.bbox[0]*s, a.bbox[1]*s,
+                  (a.bbox[2]-a.bbox[0])*s, (a.bbox[3]-a.bbox[1])*s);
+    cont.querySelector(".bbox-info").textContent = `bbox: [${a.bbox.join(", ")}]`;
+  } else {
+    cont.querySelector(".bbox-info").textContent = "bbox: — (cleared)";
+  }
+  closeModal();
+};
+
+// ─── Live-webcam keyboard shortcuts: A = add to stock, R = re-lock ────────
+let LIVE_STREAM_URL = null;
+
+function isLiveActive() {
+  const img = document.getElementById("liveStream");
+  return !img.hidden && img.src && img.src.includes("/api/stream/");
+}
+
+function pauseLiveStream() {
+  const img = document.getElementById("liveStream");
+  LIVE_STREAM_URL = img.src;
+  img.src = "";  // stops the MJPEG pull; server will keep running until /stop
+}
+
+function resumeLiveStream() {
+  if (!LIVE_STREAM_URL) return;
+  const img = document.getElementById("liveStream");
+  // add a fresh cache-buster so browser re-connects
+  const sep = LIVE_STREAM_URL.includes("?") ? "&" : "?";
+  img.src = LIVE_STREAM_URL + sep + "resume=" + Date.now();
+  img.hidden = false;
+}
+
+async function captureLiveFrame() {
+  const img = document.getElementById("liveStream");
+  const w = img.naturalWidth  || img.videoWidth  || img.clientWidth  || img.width;
+  const h = img.naturalHeight || img.videoHeight || img.clientHeight || img.height;
+  if (!w || !h) { log("no live frame to capture", "err"); return null; }
+  const cv = document.createElement("canvas");
+  cv.width = w; cv.height = h;
+  const ctx = cv.getContext("2d");
+  try { ctx.drawImage(img, 0, 0, w, h); }
+  catch (e) { log("capture failed: " + e.message, "err"); return null; }
+  // sanity: verify it isn't all black
+  const sample = ctx.getImageData(w >> 1, h >> 1, 1, 1).data;
+  if (sample[0] === 0 && sample[1] === 0 && sample[2] === 0 && sample[3] === 0) {
+    log("captured frame is empty — is the stream really running?", "err");
+    return null;
+  }
+  const blob = await new Promise(r => cv.toBlob(r, "image/png"));
+  const stillImg = new Image();
+  await new Promise(r => { stillImg.onload = r; stillImg.src = URL.createObjectURL(blob); });
+  return { blob, img: stillImg };
+}
+
+document.addEventListener("keydown", async (e) => {
+  // ignore key events while typing in inputs
+  const t = e.target;
+  if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT")) return;
+  if (modal.classList.contains("open")) return;
+  if (!isLiveActive()) return;
+
+  const k = e.key.toLowerCase();
+  if (k !== "a") return;
+
+  e.preventDefault();
+  // capture BEFORE pausing — clearing img.src wipes the pixels
+  const cap = await captureLiveFrame();
+  if (!cap) return;
+  pauseLiveStream();
+  openOneShotModal("stock",  cap.blob, cap.img, "Add product from live frame — draw box, enter name");
+});
+modal.addEventListener("click", (e) => { if (e.target === modal) closeModal(); });
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && modal.classList.contains("open")) closeModal();
+});
+
+// Bind every expand button
+document.querySelectorAll(".annot .expand-btn").forEach(btn => {
+  btn.addEventListener("click", () => {
+    const contId = btn.closest(".annot").id;
+    if (!ANNOT[contId]) { log("select an image first", "err"); return; }
+    openModal(contId);
+  });
+});
+
+// ─── Canvas rendering ──────────────────────────────────────────────────────
+const canvas = $("grid");
+const ctx = canvas.getContext("2d");
+
+function resizeCanvas() {
+  const r = canvas.getBoundingClientRect();
+  canvas.width = r.width;
+  canvas.height = r.height;
+  draw();
+}
+window.addEventListener("resize", resizeCanvas);
+
+function draw() {
+  ctx.fillStyle = "#0f172a";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  if (!STATE.warehouse || !STATE.gridCells) {
+    ctx.fillStyle = "#64748b";
+    ctx.font = "14px sans-serif";
+    ctx.fillText("Import a warehouse map to begin.", 20, 30);
+    return;
+  }
+  const wh = STATE.warehouse;
+  const rows = wh.rows ?? Math.round(wh.height_m / wh.cell_size_m);
+  const cols = wh.cols ?? Math.round(wh.width_m / wh.cell_size_m);
+  const cell = Math.min(canvas.width / cols, canvas.height / rows);
+  const ox = (canvas.width - cell * cols) / 2;
+  const oy = (canvas.height - cell * rows) / 2;
+
+  const g = STATE.gridCells;
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      const v = g[r][c];
+      if (v === 1) {
+        ctx.fillStyle = "#475569";
+        ctx.fillRect(ox + c * cell, oy + r * cell, cell + 0.5, cell + 0.5);
+      }
+    }
+  }
+  // grid lines
+  ctx.strokeStyle = "#1e293b";
+  ctx.lineWidth = 0.5;
+  for (let r = 0; r <= rows; r++) {
+    ctx.beginPath();
+    ctx.moveTo(ox, oy + r * cell); ctx.lineTo(ox + cols * cell, oy + r * cell);
+    ctx.stroke();
+  }
+  for (let c = 0; c <= cols; c++) {
+    ctx.beginPath();
+    ctx.moveTo(ox + c * cell, oy); ctx.lineTo(ox + c * cell, oy + rows * cell);
+    ctx.stroke();
+  }
+  // shelf labels
+  ctx.fillStyle = "#e2e8f0";
+  ctx.font = `${Math.max(10, cell * 1.2)}px sans-serif`;
+  ctx.textAlign = "center";
+  for (const s of wh.shelves) {
+    const px = ox + (s.x_m / wh.width_m) * cols * cell;
+    const py = oy + (1 - s.y_m / wh.height_m) * rows * cell;
+    ctx.fillStyle = "#e2e8f0";
+    ctx.fillText(s.id, px, py);
+  }
+  // path
+  if (STATE.robot && STATE.robot.path_cells && STATE.robot.path_cells.length) {
+    ctx.strokeStyle = "#38bdf8";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    for (let i = 0; i < STATE.robot.path_cells.length; i++) {
+      const [pr, pc] = STATE.robot.path_cells[i];
+      const x = ox + (pc + 0.5) * cell;
+      const y = oy + (pr + 0.5) * cell;
+      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+  }
+  // robot
+  if (STATE.robot) {
+    const rx = ox + (STATE.robot.x_m / wh.width_m) * cols * cell;
+    const ry = oy + (1 - STATE.robot.y_m / wh.height_m) * rows * cell;
+    ctx.fillStyle = "#f59e0b";
+    ctx.beginPath();
+    ctx.arc(rx, ry, Math.max(4, cell * 0.9), 0, Math.PI * 2);
+    ctx.fill();
+    // heading arrow
+    const th = (STATE.robot.theta_deg || 0) * Math.PI / 180;
+    ctx.strokeStyle = "#000";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(rx, ry);
+    ctx.lineTo(rx + Math.cos(th) * cell * 1.3, ry - Math.sin(th) * cell * 1.3);
+    ctx.stroke();
+  }
+  ctx.textAlign = "start";
+}
+
+// ─── WebSocket ─────────────────────────────────────────────────────────────
+let ws;
+function connectWs() {
+  ws = new WebSocket(`ws://${location.host}/ws`);
+  ws.onopen = () => { $("status").textContent = "connected"; $("status").className = "pill"; };
+  ws.onclose = () => { $("status").textContent = "disconnected"; $("status").className = "pill error"; setTimeout(connectWs, 1000); };
+  ws.onmessage = (e) => {
+    const m = JSON.parse(e.data);
+    if (m.type === "pose") {
+      STATE.robot = m.state;
+      $("status").textContent = m.state.status;
+      $("status").className = "pill " + m.state.status;
+      $("msg").textContent = m.state.message || "";
+      draw();
+    }
+  };
+}
+
+// ─── API calls ─────────────────────────────────────────────────────────────
+async function refreshState() {
+  const s = await (await fetch("/api/state")).json();
+  STATE.warehouse = s.warehouse;
+  STATE.robot = s.robot;
+  STATE.products = s.products;
+  STATE.locked = s.locked || [];
+  renderShelves();
+  renderInventory();
+  if (s.warehouse) await refreshGrid();
+  draw();
+}
+
+async function refreshGrid() {
+  const g = await (await fetch("/api/grid")).json();
+  STATE.gridCells = g.cells;
+  draw();
+}
+
+function renderShelves() {
+  const tb = $("shelfTable").querySelector("tbody");
+  tb.innerHTML = "";
+  const sel = $("prefillShelf");
+  const chosen = sel.value;
+  sel.innerHTML = '<option value="">Auto (round-robin)</option>';
+  if (!STATE.warehouse) return;
+  for (const s of STATE.warehouse.shelves) {
+    const opt = document.createElement("option");
+    opt.value = s.id; opt.textContent = s.id;
+    sel.appendChild(opt);
+  }
+  if ([...sel.options].some(o => o.value === chosen)) sel.value = chosen;
+  for (const s of STATE.warehouse.shelves) {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td><input value="${s.id}" data-old="${s.id}" style="width:65px" /></td>
+      <td>${s.qr}</td>
+      <td>${s.x_m.toFixed(2)}</td>
+      <td>${s.y_m.toFixed(2)}</td>
+      <td><a href="/api/shelf/${s.id}/qr.png" target="_blank" style="color:#38bdf8">QR</a></td>`;
+    const inp = tr.querySelector("input");
+    inp.addEventListener("change", async (e) => {
+      const fd = new FormData();
+      fd.append("old_id", e.target.dataset.old);
+      fd.append("new_id", e.target.value);
+      await fetch("/api/map/rename_shelf", { method: "POST", body: fd });
+      await refreshState();
+    });
+    tb.appendChild(tr);
+  }
+}
+
+function renderInventory() {
+  const tb = $("invTable").querySelector("tbody");
+  tb.innerHTML = "";
+  for (const p of STATE.products) {
+    const isLocked = (STATE.locked || []).some(n => n.toLowerCase() === p.name.toLowerCase());
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td>${p.name} ${isLocked ? "🟢" : "⚪"}</td>
+      <td>${p.shelf_id}</td>
+      <td>${p.qty}</td>
+      <td></td>`;
+    tb.appendChild(tr);
+  }
+  const locked = STATE.locked || [];
+  const ls = $("lockStatus");
+  if (locked.length) {
+    ls.innerHTML = `YOLOE tracking <b>${locked.length}</b> product(s): ${locked.map(n=>`<span style="color:#fbbf24">${n}</span>`).join(", ")}`;
+  } else {
+    ls.textContent = "no products locked yet — press A while live to add one";
+  }
+  // Populate the Pick datalist with the currently-locked products
+  const dl = document.getElementById("pickNameOptions");
+  if (dl) {
+    dl.innerHTML = "";
+    for (const n of locked) {
+      const o = document.createElement("option");
+      o.value = n;
+      dl.appendChild(o);
+    }
+  }
+}
+
+// ─── Buttons ───────────────────────────────────────────────────────────────
+$("importBtn").onclick = async () => {
+  const f = $("mapFile").files[0];
+  if (!f) { log("select a paper photo first", "err"); return; }
+  const fd = new FormData();
+  fd.append("image", f);
+  fd.append("width_m", $("mapW").value);
+  fd.append("height_m", $("mapH").value);
+  fd.append("cell_size_m", $("mapCell").value);
+  log("importing map ...");
+  const r = await fetch("/api/map/import", { method: "POST", body: fd });
+  if (!r.ok) { log("import failed: " + await r.text(), "err"); return; }
+  const j = await r.json();
+  $("warpedPreview").src = "data:image/png;base64," + j.warped_png_b64;
+  $("warpedPreview").hidden = false;
+  log(`imported: ${j.warehouse.shelves.length} shelves`, "ok");
+  await refreshState();
+};
+
+$("synthBtn").onclick = async () => {
+  const fd = new FormData();
+  fd.append("width_m", $("synthW").value);
+  fd.append("height_m", $("synthH").value);
+  fd.append("n_shelves", $("synthN").value);
+  const r = await fetch("/api/map/synth", { method: "POST", body: fd });
+  const blob = await r.blob();
+  const url = URL.createObjectURL(blob);
+  $("synthPreview").src = url;
+  $("synthPreview").hidden = false;
+  const a = document.createElement("a");
+  a.href = url; a.download = "warehouse_sketch.png"; a.click();
+  log("synth map generated & downloaded", "ok");
+};
+
+$("pickPreviewStartBtn").onclick = async () => {
+  const name = $("pickName").value.trim();
+  if (!name) { log("type a product name first", "err"); return; }
+
+  // refuse if this product hasn't been taught to YOLOE yet
+  const isLocked = (STATE.locked || []).some(n => n.toLowerCase() === name.toLowerCase());
+  if (!isLocked) {
+    const knew = STATE.locked || [];
+    const hint = knew.length
+      ? `YOLOE only knows: ${knew.join(", ")}.`
+      : `No products locked yet.`;
+    $("pickStreamMsg").innerHTML =
+      `<span style="color:#f87171">"${name}" is not locked in YOLOE.</span><br>` +
+      `${hint} Go to Section 2 → Start live camera → hold up the ${name} → press A → draw a box → type "${name}" → Confirm. Then come back here.`;
+    log(`"${name}" not locked yet — add it via Section 2 first`, "err");
+    return;
+  }
+
+  const idx = $("pickCamIdx").value || 0;
+  await fetch("/api/stream/stop", { method: "POST" });
+  const img = $("pickStream");
+  img.hidden = false;
+  const url = `/api/stream/webcam?idx=${idx}&filter=${encodeURIComponent(name)}&_=${Date.now()}`;
+  img.src = url;
+  LIVE_STREAM_URL = url;
+  $("pickStreamMsg").innerHTML =
+    `<span style="color:#34d399">searching for "${name}" only</span> — other locked products are ignored`;
+  log(`pick preview: ${name}`);
+};
+
+$("pickPreviewStopBtn").onclick = async () => {
+  await fetch("/api/stream/stop", { method: "POST" });
+  const img = $("pickStream");
+  img.src = ""; img.hidden = true;
+  $("pickStreamMsg").textContent = "";
+  log("pick preview stopped");
+};
+
+$("pickBtn").onclick = async () => {
+  const name = $("pickName").value.trim();
+  if (!name) return;
+  const fd = new FormData();
+  fd.append("name", name);
+  log(`PICK ${name} ...`);
+  const r = await (await fetch("/api/pick", { method: "POST", body: fd })).json();
+  log(r.ok ? `picked ${name} from ${r.shelf.id}` : `error: ${r.error}`, r.ok ? "ok" : "err");
+  await refreshState();
+};
+
+$("detectBtn").onclick = async () => {
+  const f = $("detectFile").files[0];
+  if (!f) { log("select a shelf photo first", "err"); return; }
+  const fd = new FormData();
+  fd.append("image", f);
+  log("running YOLOE detection ...");
+  const r = await (await fetch("/api/detect_at_shelf", { method: "POST", body: fd })).json();
+  $("detectPreview").src = "data:image/jpeg;base64," + r.annotated_jpg_b64;
+  $("detectPreview").hidden = false;
+  log(`YOLOE found ${r.count} target(s)`, r.count ? "ok" : "");
+};
+
+// ─── Live YOLOE ────────────────────────────────────────────────────────────
+$("liveSource").onchange = () => {
+  const v = $("liveSource").value;
+  $("webcamOpts").hidden = v !== "webcam";
+  $("videoOpts").hidden  = v !== "video";
+};
+
+$("liveStartBtn").onclick = async () => {
+  // stop any active stream first
+  await fetch("/api/stream/stop", { method: "POST" });
+  const img = $("liveStream");
+  img.hidden = false;
+
+  if ($("liveSource").value === "webcam") {
+    const idx = $("camIdx").value || 0;
+    img.src = `/api/stream/webcam?idx=${idx}&_=${Date.now()}`;
+    log(`live: webcam ${idx}`);
+  } else {
+    const f = $("videoFile").files[0];
+    if (!f) { log("select a video file", "err"); return; }
+    const fd = new FormData();
+    fd.append("video", f);
+    const up = await (await fetch("/api/upload_video", { method: "POST", body: fd })).json();
+    img.src = `/api/stream/video?path=${encodeURIComponent(up.path)}&_=${Date.now()}`;
+    log(`live: video ${up.path}`);
+  }
+};
+
+$("liveStopBtn").onclick = async () => {
+  await fetch("/api/stream/stop", { method: "POST" });
+  const img = $("liveStream");
+  img.src = "";
+  img.hidden = true;
+  log("live stream stopped");
+};
+
+// ─── Server-logs viewer ───────────────────────────────────────────────────
+const logsModal = document.getElementById("logsModal");
+async function loadLogs() {
+  const r = await (await fetch("/api/logs?n=500")).json();
+  document.getElementById("logsPath").textContent = r.path;
+  const pre = document.getElementById("logsContent");
+  pre.textContent = r.tail || "(log file is empty)";
+  pre.scrollTop = pre.scrollHeight;
+}
+document.getElementById("viewLogsBtn").onclick = async () => {
+  logsModal.style.display = "flex";
+  await loadLogs();
+};
+document.getElementById("logsRefreshBtn").onclick = loadLogs;
+document.getElementById("logsCloseBtn").onclick = () => { logsModal.style.display = "none"; };
+document.getElementById("logsCopyBtn").onclick = async () => {
+  const txt = document.getElementById("logsContent").textContent;
+  try { await navigator.clipboard.writeText(txt); log("logs copied to clipboard", "ok"); }
+  catch (e) { log("copy failed: " + e.message, "err"); }
+};
+logsModal.addEventListener("click", (e) => { if (e.target === logsModal) logsModal.style.display = "none"; });
+
+attachAnnotators();
+connectWs();
+refreshState();
+setInterval(refreshState, 5000);
+requestAnimationFrame(resizeCanvas);
+</script>
+
+</body>
+</html>

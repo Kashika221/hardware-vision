@@ -1,0 +1,11 @@
+*.pt
+*.pth
+*.onnx
+
+data/
+logs/
+__pycache__/
+*.pyc
+.venv/
+venv/
+.env
